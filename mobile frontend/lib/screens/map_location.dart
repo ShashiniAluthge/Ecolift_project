@@ -1,0 +1,342 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:flutter_map_location_marker/flutter_map_location_marker.dart';
+
+class MapLocation extends StatefulWidget {
+  const MapLocation({super.key});
+
+  @override
+  State<MapLocation> createState() => _MapLocationState();
+}
+
+class _MapLocationState extends State<MapLocation> {
+  final MapController _mapController = MapController();
+  LatLng? _currentPosition;
+  LatLng? _selectedLocation;
+  String _selectedAddress = '';
+  String _locationDisplayName = '';
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _determinePosition();
+  }
+
+  Future<void> _determinePosition() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) return;
+    }
+    if (permission == LocationPermission.deniedForever) return;
+
+    Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best);
+
+    LatLng current = LatLng(position.latitude, position.longitude);
+
+    setState(() {
+      _currentPosition = current;
+      _selectedLocation = current;
+    });
+
+    _mapController.move(current, 15);
+    _updateAddress(current);
+  }
+
+  Future<void> _updateAddress(LatLng location) async {
+    try {
+      List<Placemark> placemarks =
+          await placemarkFromCoordinates(location.latitude, location.longitude);
+
+      if (placemarks.isNotEmpty) {
+        Placemark place = placemarks.first;
+
+        // Build friendly first line: house number + street
+        String addressNoAndStreet = '';
+        if (place.subThoroughfare != null &&
+            place.subThoroughfare!.isNotEmpty) {
+          addressNoAndStreet += place.subThoroughfare!;
+        }
+        if (place.thoroughfare != null && place.thoroughfare!.isNotEmpty) {
+          if (addressNoAndStreet.isNotEmpty) addressNoAndStreet += ' ';
+          addressNoAndStreet += place.thoroughfare!;
+        }
+
+        // Build full address for second line
+        List<String> addressParts = [];
+        if (place.subLocality != null && place.subLocality!.isNotEmpty) {
+          addressParts.add(place.subLocality!);
+        }
+        if (place.locality != null && place.locality!.isNotEmpty) {
+          addressParts.add(place.locality!);
+        }
+        if (place.administrativeArea != null &&
+            place.administrativeArea!.isNotEmpty) {
+          addressParts.add(place.administrativeArea!);
+        }
+        if (place.country != null && place.country!.isNotEmpty) {
+          addressParts.add(place.country!);
+        }
+
+        setState(() {
+          if (addressNoAndStreet.isNotEmpty) {
+            _locationDisplayName = addressNoAndStreet;
+          } else if (place.locality != null && place.locality!.isNotEmpty) {
+            _locationDisplayName = place.locality!;
+          } else if (place.subLocality != null &&
+              place.subLocality!.isNotEmpty) {
+            _locationDisplayName = place.subLocality!;
+          } else {
+            _locationDisplayName = 'Unknown Location';
+          }
+
+          _selectedAddress = addressParts.join(", ");
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _selectedAddress = 'Unknown Location';
+        _locationDisplayName = 'Unknown Location';
+      });
+    }
+  }
+
+  void _onSearchChanged(String query) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    _debounce = Timer(const Duration(milliseconds: 500), () async {
+      if (query.isEmpty) return;
+      try {
+        List<Location> locations = await locationFromAddress(query);
+        if (locations.isNotEmpty) {
+          final target =
+              LatLng(locations.first.latitude, locations.first.longitude);
+          _mapController.move(target, 15);
+          setState(() {
+            _selectedLocation = target;
+          });
+          _updateAddress(target);
+        }
+      } catch (e) {
+        // ignore invalid queries
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Select Your Location'),
+        backgroundColor: Colors.green,
+      ),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter:
+                    _currentPosition ?? const LatLng(6.0535, 80.2210),
+                initialZoom: 15,
+                maxZoom: 18,
+                minZoom: 3,
+                onTap: (tapPosition, latlng) {
+                  setState(() {
+                    _selectedLocation = latlng;
+                  });
+                  _updateAddress(latlng);
+                },
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                ),
+                if (_currentPosition != null)
+                  const CurrentLocationLayer(
+                    style: LocationMarkerStyle(
+                      marker: DefaultLocationMarker(
+                        child: Icon(Icons.location_pin,
+                            color: Colors.white, size: 25),
+                      ),
+                      markerSize: Size(40, 40),
+                      markerDirection: MarkerDirection.heading,
+                    ),
+                  ),
+                if (_selectedLocation != null)
+                  MarkerLayer(
+                    markers: [
+                      Marker(
+                        point: _selectedLocation!,
+                        width: 40,
+                        height: 40,
+                        child: const Icon(Icons.place,
+                            color: Colors.red, size: 35),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+          // Search Bar
+          Positioned(
+            top: 16,
+            left: 16,
+            right: 16,
+            child: Material(
+              elevation: 4,
+              borderRadius: BorderRadius.circular(12),
+              child: TextField(
+                decoration: const InputDecoration(
+                  hintText: "Search location...",
+                  prefixIcon: Icon(Icons.search, color: Colors.grey),
+                  border: InputBorder.none,
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                ),
+                onChanged: _onSearchChanged,
+              ),
+            ),
+          ),
+          // Address Display Card
+          if (_selectedLocation != null)
+            Positioned(
+              top: 80,
+              left: 16,
+              right: 16,
+              child: Material(
+                elevation: 2,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.place, color: Colors.red, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _locationDisplayName,
+                              style: const TextStyle(
+                                  fontSize: 16, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _selectedAddress,
+                        style:
+                            const TextStyle(fontSize: 12, color: Colors.grey),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          // Zoom & My Location Buttons
+          Positioned(
+            bottom: 80,
+            right: 16,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FloatingActionButton(
+                  heroTag: "zoomIn",
+                  mini: true,
+                  onPressed: () {
+                    final center = _mapController.camera.center;
+                    final zoom = _mapController.camera.zoom + 1;
+                    _mapController.move(center, zoom);
+                  },
+                  backgroundColor: Colors.blue,
+                  child: const Icon(Icons.add, color: Colors.white),
+                ),
+                const SizedBox(height: 10),
+                FloatingActionButton(
+                  heroTag: "zoomOut",
+                  mini: true,
+                  onPressed: () {
+                    final center = _mapController.camera.center;
+                    final zoom = _mapController.camera.zoom - 1;
+                    _mapController.move(center, zoom);
+                  },
+                  backgroundColor: Colors.blue,
+                  child: const Icon(Icons.remove, color: Colors.white),
+                ),
+                const SizedBox(height: 10),
+                FloatingActionButton(
+                  heroTag: "myLocation",
+                  mini: true,
+                  onPressed: () {
+                    if (_currentPosition != null) {
+                      _mapController.move(_currentPosition!, 15);
+                      setState(() {
+                        _selectedLocation = _currentPosition;
+                      });
+                      _updateAddress(_currentPosition!);
+                    }
+                  },
+                  backgroundColor: Colors.blue,
+                  child: const Icon(Icons.my_location, color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+          // Confirm Button
+          Positioned(
+            bottom: 20,
+            left: 16,
+            right: 16,
+            child: ElevatedButton(
+              onPressed: _selectedLocation == null
+                  ? null
+                  : () {
+                      Navigator.pop(context, {
+                        'latitude': _selectedLocation!.latitude,
+                        'longitude': _selectedLocation!.longitude,
+                        'displayName': _locationDisplayName,
+                        'address': _selectedAddress,
+                      });
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: const Text(
+                'Confirm Location',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    super.dispose();
+  }
+}

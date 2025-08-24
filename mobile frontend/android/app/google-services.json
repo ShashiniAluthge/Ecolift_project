@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "966035255937",
+    "project_id": "ecolift-notification",
+    "storage_bucket": "ecolift-notification.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:966035255937:android:34e12e28e22708ab06d380",
+        "android_client_info": {
+          "package_name": "com.example.eco_lift_sasi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBq-kjCXfPnuu7ElI8H_gBmjbA9qUtMip0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
